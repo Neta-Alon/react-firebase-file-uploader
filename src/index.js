@@ -3,25 +3,47 @@
  * @flow
  */
 
-import React, { Component } from 'react';
-import generateRandomID from 'uuid/v4';
-import resizeAndCropImage from './utils/image';
+import React, { Component } from "react";
+import generateRandomID from "uuid/v4";
+import resizeAndCropImage from "./utils/image";
 
 const generateRandomFilename = (): string => generateRandomID();
 
 function extractExtension(filename: string): string {
   let ext = /(?:\.([^.]+))?$/.exec(filename);
   if (ext != null && ext[0] != null) {
-    return ext[0]
+    return ext[0];
   } else {
-    return ''
+    return "";
   }
+}
+
+function isProblematicGoogleDriveFile(file: File): boolean {
+  /* Neta: The problematic file changes lastModified times on every read. */
+  const lastModified1 = file.lastModified;
+  const lastModified2 = file.lastModified;
+  return (lastModified1 !== lastModified2);
+}
+
+function duplicateFile(file: File): File {
+  /* Neta: Only fix I've found is to create a whole new File. */
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      resolve(new File([reader.result], file.name, {
+        lastModified: file.lastModified,
+        type: file.type,
+      }));
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
 }
 
 
 export type Props = {
   storageRef: Object,
-  onUploadStart?: (file: Object, task: Object) => void,
+  onUploadStart?: (file: Object) => void,
   onProgress?: (progress: number, task: Object) => void,
   onUploadSuccess?: (filename: string, task: Object) => void,
   onUploadError?: (error: Object, task: Object) => void,
@@ -57,7 +79,7 @@ export default class FirebaseFileUploader extends Component<Props> {
   cancelRunningUploads() {
     while (this.uploadTasks.length > 0) {
       const task = this.uploadTasks.pop();
-      if (task.snapshot.state === 'running') {
+      if (task.snapshot.state === "running") {
         task.cancel();
       }
     }
@@ -85,11 +107,14 @@ export default class FirebaseFileUploader extends Component<Props> {
       filename
     } = this.props;
 
+    if (onUploadStart) {
+      onUploadStart(file);
+    }
+
     let filenameToUse;
     if (filename) {
-      filenameToUse = typeof filename === 'function' ? filename(file) : filename;
-    }
-    else {
+      filenameToUse = typeof filename === "function" ? filename(file) : filename;
+    } else {
       filenameToUse = randomizeFilename ? generateRandomFilename() : file.name;
     }
 
@@ -99,45 +124,44 @@ export default class FirebaseFileUploader extends Component<Props> {
     }
 
     Promise.resolve()
-      .then(() => {
-        const shouldResize =
-          file.type.match(/image.*/) &&
-          (this.props.maxWidth || this.props.maxHeight);
-        if (shouldResize) {
-          return resizeAndCropImage(
-            file,
-            this.props.maxWidth,
-            this.props.maxHeight
+    .then(() => {
+      const shouldResize =
+        file.type.match(/image.*/) &&
+        (this.props.maxWidth || this.props.maxHeight);
+      if (shouldResize) {
+        return resizeAndCropImage(
+          file,
+          this.props.maxWidth,
+          this.props.maxHeight
+        );
+      }
+      return file;
+    })
+    .then(file => {
+      return isProblematicGoogleDriveFile(file) ? duplicateFile(file) : file;
+    })
+    .then(file => {
+      const task = storageRef.child(filenameToUse).put(file, metadata);
+      task.on(
+        "state_changed",
+        snapshot =>
+          onProgress &&
+          onProgress(
+            Math.round(100 * snapshot.bytesTransferred / snapshot.totalBytes),
+            task
+          ),
+        error => onUploadError && onUploadError(error, task),
+        () => {
+          this.removeTask(task);
+          return (
+            onUploadSuccess &&
+            onUploadSuccess(task.snapshot.metadata.name, task)
           );
         }
-        return file;
-      })
-      .then(file => {
-        const task = storageRef.child(filenameToUse).put(file, metadata);
-
-        if (onUploadStart) {
-          onUploadStart(file, task);
-        }
-
-        task.on(
-          'state_changed',
-          snapshot =>
-            onProgress &&
-            onProgress(
-              Math.round(100 * snapshot.bytesTransferred / snapshot.totalBytes),
-              task
-            ),
-          error => onUploadError && onUploadError(error, task),
-          () => {
-            this.removeTask(task);
-            return (
-              onUploadSuccess &&
-              onUploadSuccess(task.snapshot.metadata.name, task)
-            );
-          }
-        );
-        this.uploadTasks.push(task);
-      });
+      );
+      this.uploadTasks.push(task);
+    })
+    .catch(error => onUploadError && onUploadError(error, null));
   }
 
   handleFileSelection = (event: Object) => {
@@ -160,19 +184,19 @@ export default class FirebaseFileUploader extends Component<Props> {
       maxWidth,
       maxHeight,
       hidden,
-      as: Input = 'input',
+      as: Input = "input",
       ...props
     } = this.props;
 
     const inputStyle = hidden
       ? Object.assign({}, props.style, {
-          width: '0.1px',
-          height: '0.1px',
-          opacity: 0,
-          overflow: 'hidden',
-          position: 'absolute',
-          zIndex: -1
-        })
+        width: "0.1px",
+        height: "0.1px",
+        opacity: 0,
+        overflow: "hidden",
+        position: "absolute",
+        zIndex: -1
+      })
       : props.style;
 
     return (
